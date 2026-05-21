@@ -74,3 +74,16 @@ bash one_click_train.sh /path/to/SLO_AV_dataset
 EPOCHS=120 BATCH_SIZE=1 LR=3e-4 WD=1e-4 BASE=32 IN_CH=4 NUM_WORKERS=4 VAL_RATIO=0.2 \
 bash one_click_train.sh /path/to/SLO_AV_dataset
 ```
+
+
+## 标签转化规则（AV RGB）
+
+训练阶段 `av` 标签按 RGB 阈值规则转为训练类别：
+
+1. 像素值先除以 255。
+2. 若 R/G/B 任一通道 > 0.5，判定为候选血管像素。
+3. 若 R/G/B 三个通道都 > 0.5（白色），判定为背景。
+4. R > 0.5 判定为动脉（label=1）。
+5. B > 0.5 判定为静脉（label=2）。
+
+实现位置见 `dataset.py::_map_av_rgb_to_train_ids`。

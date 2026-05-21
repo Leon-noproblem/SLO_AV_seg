@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class DoubleConv(nn.Module):
@@ -16,6 +17,12 @@ class DoubleConv(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+
+
+def _match_size(x, ref):
+    if x.shape[-2:] == ref.shape[-2:]:
+        return x
+    return F.interpolate(x, size=ref.shape[-2:], mode="bilinear", align_corners=False)
 
 
 class UNet(nn.Module):
@@ -48,12 +55,19 @@ class UNet(nn.Module):
         bn = self.bn(self.pool(d4))
 
         x = self.u4(bn)
+        x = _match_size(x, d4)
         x = self.c4(torch.cat([x, d4], dim=1))
+
         x = self.u3(x)
+        x = _match_size(x, d3)
         x = self.c3(torch.cat([x, d3], dim=1))
+
         x = self.u2(x)
+        x = _match_size(x, d2)
         x = self.c2(torch.cat([x, d2], dim=1))
+
         x = self.u1(x)
+        x = _match_size(x, d1)
         x = self.c1(torch.cat([x, d1], dim=1))
 
         return self.head(x)

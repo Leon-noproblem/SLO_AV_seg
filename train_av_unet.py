@@ -3,6 +3,7 @@ import random
 from pathlib import Path
 
 import numpy as np
+import cv2
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
@@ -27,7 +28,19 @@ def estimate_class_weights(ds):
     cnt = np.maximum(cnt, 1.0)
     w = np.array([0.0, 1.0 / cnt[1], 1.0 / cnt[2]], dtype=np.float32)
     w = w / (w[1:].mean() + 1e-8)
-    return torch.tensor(w, dtype=torch.float32)
+    return torch.tensor(w, dtype=torch.float32), cnt
+
+
+
+
+def validate_labels(ds, num_classes=3, max_check=200):
+    bad = 0
+    for i in range(min(len(ds), max_check)):
+        y = ds[i]["label"].numpy()
+        if y.min() < 0 or y.max() >= num_classes:
+            bad += 1
+    if bad > 0:
+        raise RuntimeError(f"Found {bad} samples with label out of [0,{num_classes-1}].")
 
 
 def evaluate(net, loader, device):
@@ -45,7 +58,12 @@ def evaluate(net, loader, device):
 
 
 def main(args):
+    cv2.setNumThreads(0)
+    torch.set_num_threads(max(1, args.cpu_threads))
     seed_everything(args.seed)
+    if args.debug_cuda:
+        import os
+        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     full_train = AVDataset(args.data_root, "train", with_label=True, use_rgb=(args.in_ch==4))
@@ -53,11 +71,15 @@ def main(args):
     n_train = len(full_train) - n_val
     train_ds, val_ds = random_split(full_train, [n_train, n_val], generator=torch.Generator().manual_seed(args.seed))
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
-    val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=max(1, args.num_workers // 2), pin_memory=True)
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True, persistent_workers=(args.num_workers>0))
+    val_workers = 0 if args.num_workers == 0 else max(1, args.num_workers // 2)
+    val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=val_workers, pin_memory=True, persistent_workers=(val_workers>0))
 
     net = UNet(in_ch=args.in_ch, out_ch=3, base=args.base).to(device)
-    class_w = estimate_class_weights(full_train).to(device)
+    validate_labels(full_train, num_classes=3)
+    class_w, label_dist = estimate_class_weights(full_train)
+    print(f"label_pixels: artery={int(label_dist[1])} vein={int(label_dist[2])}")
+    class_w = class_w.to(device)
     ce = nn.CrossEntropyLoss(ignore_index=0, weight=class_w)
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=args.wd)
     sch = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
@@ -102,7 +124,9 @@ if __name__ == "__main__":
     p.add_argument("--base", type=int, default=32)
     p.add_argument("--in_ch", type=int, default=4)
     p.add_argument("--val_ratio", type=float, default=0.2)
-    p.add_argument("--num_workers", type=int, default=4)
+    p.add_argument("--num_workers", type=int, default=0)
+    p.add_argument("--cpu_threads", type=int, default=4)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--ckpt_dir", default="checkpoints")
+    p.add_argument("--debug_cuda", action="store_true")
     main(p.parse_args())
